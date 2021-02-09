@@ -1872,7 +1872,7 @@ void Creature::SetDeathState(DeathState s)
         }
 
         // return, since we promote to CORPSE_FALLING. CORPSE_FALLING is promoted to CORPSE at next update.
-        if (CanFly() && FallGround())
+        if (!HasCreatureState(CSTATE_DESPAWNING) && CanFly() && FallGround())
             return;
 
         Unit::SetDeathState(CORPSE);
@@ -1967,6 +1967,8 @@ void Creature::Respawn()
 
 void Creature::ForcedDespawn(uint32 timeMSToDespawn)
 {
+    AddCreatureState(CSTATE_DESPAWNING);
+
     if (timeMSToDespawn)
     {
         ForcedDespawnDelayEvent *pEvent = new ForcedDespawnDelayEvent(*this);
@@ -1980,6 +1982,7 @@ void Creature::ForcedDespawn(uint32 timeMSToDespawn)
 
     RemoveCorpse();
     SetHealth(0);                                           // just for nice GM-mode view
+    ClearCreatureState(CSTATE_DESPAWNING);
 }
 
 bool Creature::IsImmuneToSpell(SpellEntry const* spellInfo, bool castOnSelf) const
@@ -2552,24 +2555,7 @@ bool Creature::MeetsSelectAttackingRequirement(Unit* pTarget, SpellEntry const* 
         return false;
 
     if (pSpellInfo)
-    {
-        switch (pSpellInfo->rangeIndex)
-        {
-            case SPELL_RANGE_IDX_SELF_ONLY:
-                return false;
-            case SPELL_RANGE_IDX_ANYWHERE:
-                return true;
-            case SPELL_RANGE_IDX_COMBAT:
-                return CanReachWithMeleeAutoAttack(pTarget);
-        }
-
-        SpellRangeEntry const* srange = sSpellRangeStore.LookupEntry(pSpellInfo->rangeIndex);
-        float max_range = Spells::GetSpellMaxRange(srange);
-        float min_range = Spells::GetSpellMinRange(srange);
-        float dist = GetCombatDistance(pTarget);
-
-        return dist < max_range && dist >= min_range;
-    }
+        return pSpellInfo->IsTargetInRange(this, pTarget);
 
     return true;
 }
@@ -2815,8 +2801,14 @@ Unit* Creature::SelectAttackingTarget(AttackingTarget target, uint32 position, S
 
 bool Creature::IsInEvadeMode() const
 {
+    if (IsPet())
+        if (Creature const* pOwner = GetOwnerCreature())
+            if (pOwner->IsInEvadeMode())
+                return true;
+
     if (IsEvadeBecauseTargetNotReachable())
         return true;
+
     return !i_motionMaster.empty() && i_motionMaster.GetCurrentMovementGeneratorType() == HOME_MOTION_TYPE;
 }
 
@@ -3208,7 +3200,7 @@ void Creature::OnEnterCombat(Unit* pWho, bool notInCombat)
             sGuardMgr.SummonGuard(this, static_cast<Player*>(pWho));
 
         if (IsPet())
-            if (Creature* pOwner = ::ToCreature(GetOwner()))
+            if (Creature* pOwner = GetOwnerCreature())
                 SetLastLeashExtensionTimePtr(pOwner->GetLastLeashExtensionTimePtr());
     }
 }
@@ -3559,7 +3551,7 @@ bool Creature::_IsTargetAcceptable(Unit const* target) const
 
     // if the target cannot be attacked, the target is not acceptable
     if (IsFriendlyTo(target)
-            || !target->IsAttackableByAOE()
+            || !target->IsTargetable(true, IsCharmerOrOwnerPlayerOrPlayerItself())
             || target->HasUnitState(UNIT_STAT_DIED))
         return false;
 
